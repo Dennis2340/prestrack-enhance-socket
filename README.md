@@ -1,13 +1,13 @@
-# Saful-Pay-Socket
+# Prestrack-Socket
 
-A real-time chat application backend built with Socket.IO, Express, and Prisma for handling multi-agent chat rooms with business support.
+A real-time chat application backend built with Socket.IO, Express, and Prisma for handling multi-doctor chat rooms with Doctor support, so patients and doctors can have realtime communication and also AI enabled communication, so the doctor can communicate with the Doctor's data based on the medical profile and past interactions and get a wholistic view of the patient with talking the patient.
 
 ## Overview
 
-Saful-Pay-Socket provides a robust backend for real-time chat applications with support for:
+Prestrack-Socket provides a robust backend for real-time chat applications with support for:
 
 - Guest and agent user types
-- Business-specific chat rooms
+- Doctor-specific chat rooms
 - Real-time messaging with Socket.IO
 - Agent presence tracking
 - Room management and overrides
@@ -23,6 +23,8 @@ Saful-Pay-Socket provides a robust backend for real-time chat applications with 
 - **Message Tagging**: Support for tagging agents in messages
 - **Typing Indicators**: Real-time typing status updates
 - **AI Toggle**: Option to enable/disable AI assistance in chat rooms
+- **Whatsapp integration**: Option for users be able to interact with the AI agent via whatsapp, and schedule a visit, with the doctor and get basic guidelines
+- **Patient Data Chat session**: Doctors can have realtime time analysis of patients data and past conversation which enabled fast diagnosis of certain diseases affecting the doctor, while aid by the AI
 
 ## Tech Stack
 
@@ -37,7 +39,7 @@ Saful-Pay-Socket provides a robust backend for real-time chat applications with 
 1. Clone the repository:
    ```
    git clone <repository-url>
-   cd saful-pay-socket
+   cd prestrack-enhance-socket
    ```
 
 2. Install dependencies:
@@ -98,8 +100,7 @@ npm start
 
 The application uses a PostgreSQL database with the following main models:
 
-- **Business**: Represents a business entity
-- **User**: Represents users (guests, agents, admins)
+- **User**: Represents users (patient, doctor, admins)
 - **Room**: Chat rooms for conversations
 - **Message**: Individual chat messages
 - **AgentPresence**: Tracks agent online status
