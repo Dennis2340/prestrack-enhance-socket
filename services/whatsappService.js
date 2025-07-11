@@ -1,18 +1,7 @@
 import { db } from "../db/index.js";
 import * as dotenv from 'dotenv';
-import twilio from 'twilio';
 
 dotenv.config();
-
-// Twilio WhatsApp Sandbox configuration
-const TWILIO_WHATSAPP_NUMBER = '+14155238886';
-const FROM = `whatsapp:${TWILIO_WHATSAPP_NUMBER}`;
-
-// Initialize Twilio client
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
 
 // WhatsApp number formatting utility
 function formatWhatsAppNumber(phone) {
@@ -20,107 +9,193 @@ function formatWhatsAppNumber(phone) {
   const cleaned = phone.replace(/[^0-9]/g, '');
   // Add country code if missing (assuming Sierra Leone +232)
   if (cleaned.startsWith('232')) {
-    return `whatsapp:${cleaned}`;
+    return cleaned;
   } else if (cleaned.startsWith('31466865')) {
-    return 'whatsapp:+23231466865';
-  } else {
-    return `whatsapp:+232${cleaned}`;
+    return '23231466865';
+  } else if (!cleaned.startsWith('232')) {
+    return `232${cleaned}`;
   }
+  return cleaned;
 }
 
 export async function handleWhatsAppMessage(req, res) {
   try {
-    const { From, Body, MessageSid } = req.body;
-    const phoneNumber = From.replace('whatsapp:', '');
+    const messages = req.body.messages;
     
-    // Create email from phone number
-    const email = `whatsapp_${phoneNumber}@pres-track.com`;
-
-    // Find or create user
-    let user = await db.user.findUnique({
-      where: { email }
-    });
-
-    if (!user) {
-      user = await db.user.create({
-        data: {
-          email,
-          name: "WhatsApp User",
-          role: "guest",
-          businessId: "PresTrack-id" // This should be configurable
-        }
-      });
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Invalid message format' });
     }
 
-    // Create or find room for WhatsApp user
-    let room = await db.room.findUnique({
-      where: { guestId: user.id }
-    });
+    for (const message of messages) {
+      if (message.from_me) continue;
+      
+      const phoneNumber = message.chat_id.split('@')[0];
+      const messageText = message.text?.body;
+      
+      if (!messageText) continue;
+      
+      // Create email from phone number
+      const email = `whatsapp_${phoneNumber}@pres-track.com`;
 
-    if (!room) {
-      room = await db.room.create({
-        data: {
-          name: `whatsapp_${phoneNumber}`,
-          status: "active",
-          businessId: "PresTrack-id",
-          guestId: user.id
+      try {
+        // First, find an existing business or create a default one
+        let business = await db.business.findFirst();
+        if (!business) {
+          business = await db.business.create({
+            data: {
+              name: "Default Business",
+              // Add other required fields as per your schema
+            }
+          });
         }
-      });
-    }
 
-    // Create message
-    const message = await db.message.create({
-      data: {
-        content: Body,
-        senderType: "guest",
-        senderId: user.id,
-        roomId: room.id,
-        timestamp: new Date()
+        // Find or create user
+        let user = await db.user.findUnique({
+          where: { email }
+        });
+
+        if (!user) {
+          user = await db.user.create({
+            data: {
+              email,
+              name: "WhatsApp User",
+              role: "guest",
+              businessId: business.id
+            }
+          });
+        }
+
+        // Create or find room for WhatsApp user
+        let room = await db.room.findFirst({
+          where: { 
+            guestId: user.id,
+            businessId: business.id
+          }
+        });
+
+        if (!room) {
+          room = await db.room.create({
+            data: {
+              name: `whatsapp_${phoneNumber}`,
+              status: "active",
+              businessId: business.id,
+              guestId: user.id
+            }
+          });
+        }
+
+        // Create message in database
+        await db.message.create({
+          data: {
+            content: messageText,
+            senderType: "guest",
+            senderId: user.id,
+            roomId: room.id,
+            timestamp: new Date()
+          }
+        });
+
+        try {
+          // Process with AI
+          const aiResponse = await processWithAI(messageText, phoneNumber);
+
+          // Send AI response back via WhatsApp
+          const response = await fetch('https://gate.whapi.cloud/messages/text', {
+            method: 'POST',
+            headers: {
+              'accept': 'application/json',
+              'content-type': 'application/json',
+              'authorization': `Bearer ${process.env.BEARER_TOKEN}`
+            },
+            body: JSON.stringify({
+              typing_time: 10,
+              to: phoneNumber,
+              body: aiResponse
+            })
+          });
+
+          // Save AI response to database
+          if (aiResponse) {
+            await db.message.create({
+              data: {
+                content: aiResponse,
+                senderType: "agent",
+                senderId: user.id, // Or system user ID if available
+                roomId: room.id,
+                timestamp: new Date()
+              }
+            });
+          }
+
+          const data = await response.json();
+          console.log('AI response sent via WhatsApp:', data);
+          
+        } catch (aiError) {
+          console.error('Error processing AI response:', aiError);
+          // Continue with next message even if AI fails
+        }
+
+      } catch (error) {
+        console.error('Error processing message:', error);
+        // Continue with next message on error
+        continue;
       }
-    });
-
-    // Process with AI
-    const aiResponse = await processWithAI(Body, user.id);
-
-    // Send AI response back via WhatsApp
-    try {
-      const message = await twilioClient.messages.create({
-        body: aiResponse,
-        to: formatWhatsAppNumber(phoneNumber),
-        from: FROM
-      });
-      console.log('WhatsApp message sent:', message.sid);
-      return message.sid;
-    } catch (error) {
-      console.error('Error sending WhatsApp message:', error);
-      throw new Error('Failed to send WhatsApp message');
     }
-
-    res.status(200).send('Message processed');
+    
+    res.status(200).json({ status: 'success' });
   } catch (error) {
     console.error('Error handling WhatsApp message:', error);
-    res.status(500).send('Error processing message');
+    res.status(500).json({ 
+      error: 'Error processing message',
+      details: error.message 
+    });
   }
 }
 
-async function processWithAI(message, userId) {
-  // Your AI integration logic here
-  const response = await fetch("https://genistud.io/api/message", {
-    method: "POST",
-    body: JSON.stringify({
-      chatbotId: process.env.CHATBOT_ID,
-      email: "whatsapp-user@example.com",
-      message: message
-    }),
-    headers: { "Content-Type": "application/json" }
-  });
+async function processWithAI(message, phoneNumber) {
+  try {
+    const email = `whatsapp_${phoneNumber}@pres-track.com`;
+    
+    const response = await fetch("https://genistud.io/api/message", {
+      method: "POST",
+      body: JSON.stringify({
+        chatbotId: process.env.CHATBOT_ID,
+        email: email,
+        message: message
+      }),
+      headers: { "Content-Type": "application/json" }
+    });
 
-  if (!response.ok) {
-    throw new Error("AI processing failed");
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('AI API Error:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText
+      });
+      throw new Error(`AI processing failed: ${response.status} ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No reader available for streaming response");
+    }
+
+    const decoder = new TextDecoder();
+    let fullResponse = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fullResponse += decoder.decode(value, { stream: true });
+    }
+
+    console.log("AI Response:", fullResponse);
+    return fullResponse;
+  } catch (error) {
+    console.error('Error in processWithAI:', error);
+    throw error;
   }
-
-  const aiResponse = await response.text();
-  return aiResponse;
 }
 
 export async function sendAppointmentReminder(visitId) {
@@ -133,28 +208,25 @@ export async function sendAppointmentReminder(visitId) {
     if (!visit) throw new Error("Visit not found");
 
     const message = `⏰ Reminder: You have a visit scheduled at ${visit.scheduledTime.toLocaleString()}.`;
+    const toNumber = formatWhatsAppNumber(visit.guest.phone);
 
-    try {
-      const message = await twilioClient.messages
-        .create({
-          messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
-          body: message,
-          to: formatWhatsAppNumber(visit.guest.phone),
-        })
-        .then((message) => {
-          console.log('WhatsApp reminder sent:', message.sid);
-          return message.sid;
-        })
-        .catch((error) => {
-          console.error('Error sending appointment reminder:', error);
-          throw new Error('Failed to send appointment reminder');
-        });
-    } catch (error) {
-      console.error('Error sending appointment reminder:', error);
-      throw error;
-    }
+    const response = await fetch('https://gate.whapi.cloud/messages/text', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'authorization': `Bearer ${process.env.BEARER_TOKEN}`
+      },
+      body: JSON.stringify({
+        typing_time: 10,
+        to: toNumber,
+        body: message
+      })
+    });
 
-    return { success: true };
+    const data = await response.json();
+    console.log('Appointment reminder sent via WhatsApp:', data);
+    return data;
   } catch (error) {
     console.error('Error sending appointment reminder:', error);
     throw error;
@@ -163,15 +235,40 @@ export async function sendAppointmentReminder(visitId) {
 
 export async function createAppointmentFromWhatsApp(req, res) {
   try {
-    const { From, Body } = req.body;
-    const phoneNumber = From.replace('whatsapp:', '');
+    const messages = req.body.messages;
+    
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      throw new Error("No valid messages found");
+    }
+
+    const message = messages[0];
+    const phoneNumber = message.chat_id.split('@')[0];
+    const messageText = message.text?.body;
+
+    if (!messageText) {
+      throw new Error("No message text found");
+    }
 
     // Parse appointment details from message
     // This is a simple example - you might want to use NLP for better parsing
-    const [date, time] = Body.match(/\d{1,2}[/\-]\d{1,2}/g) || [];
+    const [date, time] = messageText.match(/\d{1,2}[/\-]\d{1,2}/g) || [];
 
     if (!date || !time) {
-      throw new Error("Invalid appointment format");
+      // Send error message back via WhatsApp
+      await fetch('https://gate.whapi.cloud/messages/text', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'content-type': 'application/json',
+          'authorization': `Bearer ${process.env.BEARER_TOKEN}`
+        },
+        body: JSON.stringify({
+          typing_time: 10,
+          to: phoneNumber,
+          body: '❌ Invalid appointment format. Please use format: DD/MM HH:MM'
+        })
+      });
+      return res.status(400).json({ error: 'Invalid appointment format' });
     }
 
     // Create email from phone number
@@ -202,11 +299,19 @@ export async function createAppointmentFromWhatsApp(req, res) {
       }
     });
 
-    // Send confirmation
-    await twilioClient.messages.create({
-      from: FROM,
-      to: From,
-      body: `✅ Appointment scheduled for ${visit.scheduledTime.toLocaleString()}`
+    // Send confirmation via WhatsApp
+    await fetch('https://gate.whapi.cloud/messages/text', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'authorization': `Bearer ${process.env.BEARER_TOKEN}`
+      },
+      body: JSON.stringify({
+        typing_time: 10,
+        to: phoneNumber,
+        body: `✅ Appointment scheduled for ${visit.scheduledTime.toLocaleString()}`
+      })
     });
 
     res.status(200).send('Appointment created');
