@@ -41,7 +41,7 @@ export async function handleWhatsAppMessage(req, res) {
       try {
         // Ensure business exists using the existing helper function
         // Using a default business ID for WhatsApp messages
-        const business = await ensureBusinessExists(process.env.BUSINESS_ID);
+        const business = await ensureBusinessExists(process.env.BUSINESS_ID || "PresTrack-id",);
         if (!business) {
           throw new Error('Failed to ensure business exists');
         }
