@@ -3,22 +3,31 @@ import { db } from "../db/index.js";
 /**
  * Ensure a Business exists for the given businessId, creating it if necessary.
  */
-async function ensureBusinessExists(
-  businessId,
-  businessName = "Default Business"
-) {
+export async function ensureBusinessExists(businessId, businessName = "Default Business") {
   try {
+    // First try to find by ID
     let business = await db.business.findUnique({
       where: { id: businessId },
     });
+    
+    // If not found by ID, try to find by name
     if (!business) {
-      business = await db.business.create({
-        data: {
-          id: businessId, // Use the provided businessId
-          name: businessName,
-        },
+      business = await db.business.findFirst({
+        where: { name: businessName },
       });
-      console.log(`Created new business with ID: ${businessId}`);
+      
+      // If still not found, create new business
+      if (!business) {
+        business = await db.business.create({
+          data: {
+            id: businessId,
+            name: businessName,
+          },
+        });
+        console.log(`Created new business with ID: ${businessId}`);
+      } else {
+        console.log(`Found existing business with name: ${businessName}`);
+      }
     }
     return business;
   } catch (error) {
