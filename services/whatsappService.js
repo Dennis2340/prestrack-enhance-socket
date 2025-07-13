@@ -1,5 +1,6 @@
 import { db } from "../db/index.js";
 import * as dotenv from 'dotenv';
+import { ensureBusinessExists } from './chatService.js';
 
 dotenv.config();
 
@@ -38,15 +39,11 @@ export async function handleWhatsAppMessage(req, res) {
       const email = `whatsapp_${phoneNumber}@pres-track.com`;
 
       try {
-        // First, find an existing business or create a default one
-        let business = await db.business.findFirst();
+        // Ensure business exists using the existing helper function
+        // Using a default business ID for WhatsApp messages
+        const business = await ensureBusinessExists(process.env.BUSINESS_ID);
         if (!business) {
-          business = await db.business.create({
-            data: {
-              name: "Default Business",
-              // Add other required fields as per your schema
-            }
-          });
+          throw new Error('Failed to ensure business exists');
         }
 
         // Find or create user
